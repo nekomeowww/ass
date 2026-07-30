@@ -2,6 +2,8 @@
 
 Already Shipped JS (`ass`) is a tiny JavaScript and TypeScript CLI powered by the operating system's WebView. It embeds [wry](https://github.com/tauri-apps/wry) directly.
 
+The release binary is under **0.8 MB** without TypeScript support and only **1.66 MB** with TypeScript enabled.
+
 The JavaScript engine is whatever the platform already ships:
 
 - macOS: WebKit / JavaScriptCore through `WKWebView`
@@ -62,6 +64,19 @@ ass daemon stop
 ```
 
 Each daemon request runs in a fresh sandboxed iframe, so JavaScript globals are not retained between requests. The interactive REPL intentionally keeps one persistent realm.
+
+## Compiled size
+
+Executable sizes measured from arm64 release builds on macOS:
+
+| Runtime | Compiled size |
+| --- | ---: |
+| Node.js 24.14.0 | 119.13 MB |
+| `ass` with TypeScript | 1.66 MB |
+| `ass` without TypeScript | 0.80 MB |
+| QuickJS 2026-06-04 | 0.74 MB |
+
+These figures use decimal megabytes (`1 MB = 1,000,000 bytes`) and measure the executable itself rather than the total installed footprint. `ass` stays small by using the system WebView; Node.js and QuickJS ship their JavaScript engines in their own binaries. The QuickJS figure comes from the Homebrew arm64 bottle.
 
 ## Benchmark
 
