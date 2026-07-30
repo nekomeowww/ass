@@ -1,0 +1,4 @@
+{
+  "ignore": ["examples/**"],
+  "ignoreFiles": ["packages/bridge/dist/**"]
+}

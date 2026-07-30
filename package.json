@@ -1,0 +1,31 @@
+{
+  "name": "@ass/root",
+  "type": "module",
+  "private": true,
+  "packageManager": "pnpm@11.13.0",
+  "license": "MIT OR Apache-2.0",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "knip": "knip",
+    "lint": "eslint --cache packages eslint.config.ts",
+    "lint:fix": "eslint --cache packages eslint.config.ts --fix",
+    "lint:oxlint": "oxlint packages/bridge/src packages/bridge/tsdown.config.ts",
+    "spellcheck": "cspell README.md bench packages",
+    "test": "pnpm run typecheck && pnpm run lint && pnpm run build",
+    "typecheck": "pnpm -r run typecheck",
+    "up": "taze -w -r -I && pnpm prune && pnpm dedupe"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "catalog:",
+    "@moeru/eslint-config": "catalog:",
+    "cspell": "catalog:",
+    "eslint": "catalog:",
+    "eslint-plugin-oxlint": "catalog:",
+    "jiti": "catalog:",
+    "knip": "catalog:",
+    "oxlint": "catalog:",
+    "taze": "catalog:",
+    "tsdown": "catalog:",
+    "typescript": "catalog:"
+  }
+}

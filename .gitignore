@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+.Trash/
+
+# Editors
+.idea/
+*.swp
+
+# Node.js
+node_modules/
+*.log
+pnpm-debug.log*
+.eslintcache
+**/*.tsbuildinfo
+
+# Build output
+target/
+**/dist/
+!packages/bridge/dist/
+!packages/bridge/dist/**/*.js

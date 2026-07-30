@@ -1,0 +1,15 @@
+{
+  "name": "ass-example-bundled-tsdown",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.13.0",
+  "scripts": {
+    "build": "tsdown",
+    "run": "../../target/debug/ass dist/index.mjs",
+    "test": "pnpm run build && node verify.mjs"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "4.17.12",
+    "lodash-es": "4.17.21"
+  }
+}

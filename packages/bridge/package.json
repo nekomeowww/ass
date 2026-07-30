@@ -1,0 +1,10 @@
+{
+  "name": "@ass/bridge",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsdown",
+    "test": "pnpm run typecheck && pnpm run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}
