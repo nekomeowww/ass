@@ -10,6 +10,64 @@ The JavaScript engine is whatever the platform already ships:
 - Windows: Microsoft Edge WebView2
 - Linux: WebKitGTK
 
+## Installation
+
+Download prebuilt binaries from [GitHub Releases](https://github.com/nekomeowww/ass-js/releases).
+
+> [!NOTE]
+> Each release archive has a matching `.sha256` file for optional checksum verification.
+
+### macOS
+
+```sh
+mkdir -p "${HOME}/.local/bin" && curl -fsSL "https://github.com/nekomeowww/ass-js/releases/latest/download/ass-$([ "$(uname -m)" = arm64 ] && echo aarch64 || echo x86_64)-apple-darwin.tar.gz" | tar -xz -C "${HOME}/.local/bin"
+```
+
+### Linux
+
+```sh
+mkdir -p "${HOME}/.local/bin" && curl -fsSL "https://github.com/nekomeowww/ass-js/releases/latest/download/ass-$([ "$(uname -m)" = aarch64 ] && echo aarch64 || echo x86_64)-unknown-linux-gnu.tar.gz" | tar -xz -C "${HOME}/.local/bin"
+```
+
+Ensure `${HOME}/.local/bin` is included in `PATH`.
+
+#### Prerequisites
+
+Install the WebKitGTK 4.1 runtime for your distribution:
+
+```sh
+# Debian / Ubuntu
+sudo apt update
+sudo apt install libwebkit2gtk-4.1-0
+
+# Fedora
+sudo dnf install webkit2gtk4.1
+
+# Arch Linux / Manjaro
+sudo pacman -S webkit2gtk-4.1
+```
+
+Check whether a Wayland or X11 display is available:
+
+```sh
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  echo "Wayland display: ${WAYLAND_DISPLAY}"
+elif [ -n "${DISPLAY:-}" ]; then
+  echo "X11 display: ${DISPLAY}"
+else
+  echo 'No graphical display detected'
+fi
+```
+
+#### X11 (not recommended)
+
+For a headless Debian or Ubuntu environment, Xvfb can provide a temporary virtual X11 display:
+
+```sh
+sudo apt install xvfb
+xvfb-run -a ass -p '21 * 2'
+```
+
 ## Features
 
 - Supports JavaScript and ESM. Specify `--module` explicitly if automatic module detection fails.
