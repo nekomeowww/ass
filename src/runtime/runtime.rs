@@ -1,4 +1,9 @@
-use std::{collections::VecDeque, path::PathBuf, sync::mpsc::Sender};
+use std::{
+    collections::VecDeque,
+    panic::{AssertUnwindSafe, catch_unwind},
+    path::PathBuf,
+    sync::mpsc::Sender,
+};
 
 use serde::Deserialize;
 use winit::{
@@ -9,7 +14,10 @@ use winit::{
 };
 use wry::{BackgroundThrottlingPolicy, PageLoadEvent, WebView, WebViewBuilder};
 
-use super::modules::ModuleHost;
+use super::modules::{
+    ModuleHost, NativeExecutor, NativeHost, NativeResult, SubmitError, os_initialization_script,
+    process_initialization_script, rewrite_node_specifiers,
+};
 
 #[cfg(target_os = "linux")]
 use gtk::prelude::*;
@@ -21,6 +29,7 @@ use winit::window::Window;
 use wry::WebViewBuilderExtUnix;
 
 const RUNTIME_HTML: &str = r#"<!doctype html><meta charset="utf-8"><title>ass runtime</title>"#;
+const MAIN_REALM_ID: u64 = 0;
 
 #[derive(Debug)]
 pub struct Evaluation {
@@ -29,6 +38,7 @@ pub struct Evaluation {
     pub module_path: Option<PathBuf>,
     pub module_root: Option<PathBuf>,
     pub isolated: bool,
+    pub wait_for_referenced_resources: bool,
     pub response: Sender<EvaluationEvent>,
 }
 
@@ -36,6 +46,12 @@ pub struct Evaluation {
 pub enum EvaluationMode {
     Script,
     Module,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UncaughtPolicy {
+    ExitRuntime,
+    ReportAndContinue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -47,6 +63,7 @@ pub struct EvaluationResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EvaluationEvent {
     Console { level: String, text: String },
+    Exit(i32),
     Result(EvaluationResult),
 }
 
@@ -55,6 +72,11 @@ pub enum UserEvent {
     Ready,
     Evaluate(Evaluation),
     Message(String),
+    NativeResult {
+        call: u64,
+        realm: u64,
+        result: NativeResult,
+    },
     Exit(i32),
 }
 
@@ -71,7 +93,19 @@ enum BridgeMessage {
         text: String,
     },
     Uncaught {
+        realm: u64,
         text: String,
+    },
+    Native {
+        v: u8,
+        call: u64,
+        realm: u64,
+        op: String,
+        args: serde_json::Value,
+    },
+    Exit {
+        code: i32,
+        realm: u64,
     },
 }
 
@@ -85,14 +119,23 @@ pub struct Runtime {
     ready: bool,
     next_id: u64,
     queued: VecDeque<Evaluation>,
-    pending: Option<(u64, Sender<EvaluationEvent>)>,
+    pending: Option<(u64, u64, Sender<EvaluationEvent>)>,
     initial: Option<Evaluation>,
     module_host: ModuleHost,
+    native_host: NativeHost,
+    native_executor: NativeExecutor,
+    process_executor: NativeExecutor,
+    tls_executor: NativeExecutor,
+    uncaught_policy: UncaughtPolicy,
     exit_code: i32,
 }
 
 impl Runtime {
-    pub fn new(proxy: EventLoopProxy<UserEvent>, initial: Option<Evaluation>) -> Self {
+    pub fn new(
+        proxy: EventLoopProxy<UserEvent>,
+        initial: Option<Evaluation>,
+        uncaught_policy: UncaughtPolicy,
+    ) -> Self {
         Self {
             proxy,
             window: None,
@@ -103,6 +146,11 @@ impl Runtime {
             pending: None,
             initial,
             module_host: ModuleHost::default(),
+            native_host: NativeHost::default(),
+            native_executor: NativeExecutor::default(),
+            process_executor: NativeExecutor::new("ass-process", 4, 128),
+            tls_executor: NativeExecutor::new("ass-tls", 8, 256),
+            uncaught_policy,
             exit_code: 0,
         }
     }
@@ -132,6 +180,8 @@ impl Runtime {
         let mut builder = WebViewBuilder::new()
             .with_visible(false)
             .with_background_throttling(BackgroundThrottlingPolicy::Disabled)
+            .with_initialization_script(process_initialization_script())
+            .with_initialization_script(os_initialization_script())
             .with_initialization_script(include_str!("../../packages/bridge/dist/core/core.js"))
             .with_initialization_script(include_str!(
                 "../../packages/bridge/dist/isolated-realm/isolated-realm.js"
@@ -154,6 +204,7 @@ impl Runtime {
                 &evaluation.source,
                 evaluation.mode,
                 evaluation.isolated,
+                evaluation.wait_for_referenced_resources,
                 initial_module_url.as_deref(),
             ));
         }
@@ -190,7 +241,11 @@ impl Runtime {
         self.window = Some(window);
         self.webview = Some(webview);
         if let (Some(id), Some(evaluation)) = (initial_id, initial) {
-            self.pending = Some((id, evaluation.response));
+            self.pending = Some((
+                id,
+                native_realm_id(id, evaluation.isolated),
+                evaluation.response,
+            ));
         }
         Ok(())
     }
@@ -222,9 +277,14 @@ impl Runtime {
             &evaluation.source,
             evaluation.mode,
             evaluation.isolated,
+            evaluation.wait_for_referenced_resources,
             module_url.as_deref(),
         );
-        self.pending = Some((id, evaluation.response));
+        self.pending = Some((
+            id,
+            native_realm_id(id, evaluation.isolated),
+            evaluation.response,
+        ));
 
         if let Err(error) = self
             .webview
@@ -232,7 +292,10 @@ impl Runtime {
             .expect("ready runtime must have a webview")
             .evaluate_script(&script)
         {
-            let (_, response) = self.pending.take().expect("pending evaluation");
+            let (_, realm, response) = self.pending.take().expect("pending evaluation");
+            if realm != MAIN_REALM_ID {
+                self.native_host.close_realm(realm);
+            }
             self.module_host.unmount(id);
             let _ = response.send(EvaluationEvent::Result(EvaluationResult {
                 success: false,
@@ -269,7 +332,7 @@ impl Runtime {
     /// - [`Runtime::user_event`]
     ///
     /// Downstream:
-    /// - [`EvaluationEvent`] through the active evaluation response channel
+    /// - [`EvaluationEvent`], [`NativeExecutor::submit`], or native realm cleanup
     fn handle_message(&mut self, message: &str) {
         let parsed = match serde_json::from_str::<BridgeMessage>(message) {
             Ok(parsed) => parsed,
@@ -285,12 +348,24 @@ impl Runtime {
                 success,
                 display,
             } => {
-                let Some((pending_id, response)) = self.pending.take() else {
+                let Some((pending_id, _, _)) = self.pending.as_ref() else {
+                    if id < self.next_id {
+                        return;
+                    }
                     eprintln!("ass: unexpected result from webview");
                     return;
                 };
-                if id != pending_id {
+                if id != *pending_id {
+                    if id < *pending_id {
+                        return;
+                    }
                     eprintln!("ass: result id mismatch: expected {pending_id}, received {id}");
+                    return;
+                }
+                let (pending_id, realm, response) =
+                    self.pending.take().expect("pending result checked above");
+                if realm != MAIN_REALM_ID {
+                    self.native_host.close_realm(realm);
                 }
                 self.module_host.unmount(pending_id);
                 let _ = response.send(EvaluationEvent::Result(EvaluationResult {
@@ -300,7 +375,7 @@ impl Runtime {
                 self.dispatch_next();
             }
             BridgeMessage::Console { level, text } => {
-                if let Some((_, response)) = self.pending.as_ref() {
+                if let Some((_, _, response)) = self.pending.as_ref() {
                     let _ = response.send(EvaluationEvent::Console { level, text });
                 } else if matches!(level.as_str(), "warn" | "error") {
                     eprintln!("{text}");
@@ -308,17 +383,156 @@ impl Runtime {
                     println!("{text}");
                 }
             }
-            BridgeMessage::Uncaught { text } => {
-                if let Some((_, response)) = self.pending.as_ref() {
-                    let _ = response.send(EvaluationEvent::Console {
-                        level: "error".to_owned(),
-                        text,
-                    });
-                } else {
+            BridgeMessage::Uncaught { realm, text } => {
+                let Some((id, pending_realm, response)) = self.pending.take() else {
                     eprintln!("{text}");
+                    if realm == MAIN_REALM_ID && self.uncaught_policy == UncaughtPolicy::ExitRuntime
+                    {
+                        let _ = self.proxy.send_event(UserEvent::Exit(1));
+                    }
+                    return;
+                };
+                if realm != pending_realm {
+                    self.pending = Some((id, pending_realm, response));
+                    return;
+                }
+                if realm != MAIN_REALM_ID || self.uncaught_policy == UncaughtPolicy::ExitRuntime {
+                    self.native_host.close_realm(realm);
+                    self.module_host.unmount(id);
+                }
+                let _ = response.send(EvaluationEvent::Result(EvaluationResult {
+                    success: false,
+                    display: text,
+                }));
+                self.dispatch_next();
+            }
+            BridgeMessage::Native {
+                v,
+                call,
+                realm,
+                op,
+                args,
+            } => {
+                if v != 1 {
+                    self.resolve_native(
+                        call,
+                        realm,
+                        Err(super::modules::native_error(
+                            "ERR_ASS_PROTOCOL_VERSION",
+                            format!("unsupported native protocol version {v}"),
+                        )),
+                    );
+                    return;
+                }
+                if realm != MAIN_REALM_ID
+                    && self.pending.as_ref().map(|(_, realm, _)| *realm) != Some(realm)
+                {
+                    return;
+                }
+                let proxy = self.proxy.clone();
+                let native_host = self.native_host.clone();
+                let executor = match op.as_str() {
+                    "child_process.exec" => &self.process_executor,
+                    "tls.connect" | "tls.handshake" => &self.tls_executor,
+                    _ => &self.native_executor,
+                };
+                let submit = executor.submit(move || {
+                    let result =
+                        catch_unwind(AssertUnwindSafe(|| native_host.execute(realm, &op, args)))
+                            .unwrap_or_else(|_| {
+                                Err(super::modules::native_error(
+                                    "ERR_ASS_NATIVE_PANIC",
+                                    format!("native operation {op} panicked"),
+                                ))
+                            });
+                    let _ = proxy.send_event(UserEvent::NativeResult {
+                        call,
+                        realm,
+                        result,
+                    });
+                });
+                if let Err(error) = submit {
+                    let (code, message) = match error {
+                        SubmitError::Full => (
+                            "ERR_ASS_NATIVE_QUEUE_FULL",
+                            "native operation queue is full",
+                        ),
+                        SubmitError::Stopped => (
+                            "ERR_ASS_NATIVE_EXECUTOR_STOPPED",
+                            "native operation executor has stopped",
+                        ),
+                    };
+                    self.resolve_native(
+                        call,
+                        realm,
+                        Err(super::modules::native_error(code, message)),
+                    );
                 }
             }
+            BridgeMessage::Exit { code, realm } => {
+                if realm != MAIN_REALM_ID
+                    && self.pending.as_ref().map(|(_, realm, _)| *realm) != Some(realm)
+                {
+                    return;
+                }
+                let Some((id, _, response)) = self.pending.take() else {
+                    if realm == MAIN_REALM_ID {
+                        let _ = self.proxy.send_event(UserEvent::Exit(code.rem_euclid(256)));
+                    }
+                    return;
+                };
+                self.native_host.close_realm(realm);
+                self.module_host.unmount(id);
+                let _ = response.send(EvaluationEvent::Exit(code.rem_euclid(256)));
+                self.dispatch_next();
+            }
         }
+    }
+
+    /// Resolves one asynchronous Rust operation in its owning WebView realm.
+    ///
+    /// Triggering workflow:
+    ///
+    /// [`NativeExecutor::submit`]
+    ///   -> [`NativeHost::execute`]
+    ///     -> [`UserEvent::NativeResult`]
+    ///     -> [`Runtime::user_event`]
+    ///       -> [`Runtime::resolve_native`]
+    ///
+    /// Upstream:
+    /// - background native operation worker
+    ///
+    /// Downstream:
+    /// - JavaScript `window.__ass.resolveNative`
+    fn resolve_native(&self, call: u64, realm: u64, result: NativeResult) {
+        if realm != MAIN_REALM_ID
+            && self.pending.as_ref().map(|(_, realm, _)| *realm) != Some(realm)
+        {
+            return;
+        }
+        let (success, value) = match result {
+            Ok(value) => (true, value),
+            Err(error) => (
+                false,
+                serde_json::to_value(error).expect("native errors always serialize"),
+            ),
+        };
+        let encoded = serde_json::to_string(&value).expect("JSON values always serialize");
+        let script = format!("window.__ass.resolveNative({call}, {success}, {encoded})");
+        if let Err(error) = self
+            .webview
+            .as_ref()
+            .expect("an active realm must have a webview")
+            .evaluate_script(&script)
+        {
+            eprintln!("ass: failed to resolve native operation: {error}");
+        }
+    }
+}
+
+impl Drop for Runtime {
+    fn drop(&mut self) {
+        self.native_host.close_all();
     }
 }
 
@@ -360,6 +574,11 @@ impl ApplicationHandler<UserEvent> for Runtime {
                 self.dispatch_next();
             }
             UserEvent::Message(message) => self.handle_message(&message),
+            UserEvent::NativeResult {
+                call,
+                realm,
+                result,
+            } => self.resolve_native(call, realm, result),
             UserEvent::Exit(code) => {
                 self.exit_code = code;
                 event_loop.exit();
@@ -393,13 +612,25 @@ fn evaluation_script(
     source: &str,
     mode: EvaluationMode,
     isolated: bool,
+    wait_for_referenced_resources: bool,
     module_url: Option<&str>,
 ) -> String {
-    let encoded_source = serde_json::to_string(source).expect("strings always serialize");
+    let realm = native_realm_id(id, isolated);
+    let rewritten_source = rewrite_node_specifiers(source, id);
+    let encoded_source =
+        serde_json::to_string(&rewritten_source).expect("strings always serialize");
     let encoded_module_url = serde_json::to_string(&module_url).expect("strings always serialize");
+    let buffer_module_url = format!("ass://module/{id}/__ass_builtin__/buffer");
+    let encoded_buffer_module_url =
+        serde_json::to_string(&buffer_module_url).expect("module URLs always serialize");
+    let wait_for_referenced_resources = if wait_for_referenced_resources {
+        "true"
+    } else {
+        "false"
+    };
     let evaluation = if isolated {
         format!(
-            "window.__ass.evaluateIsolated({encoded_source}, {}, {encoded_module_url})",
+            "window.__ass.evaluateIsolated({encoded_source}, {}, {encoded_module_url}, {id})",
             matches!(mode, EvaluationMode::Module)
         )
     } else {
@@ -419,7 +650,9 @@ fn evaluation_script(
     if isolated {
         format!(
             r#"Promise.resolve()
-  .then(() => {evaluation})
+  .then(() => import({encoded_buffer_module_url}))
+  .then(module => {{ globalThis.Buffer ??= module.Buffer; return {evaluation}; }})
+  .then(async outcome => {{ await window.__ass.waitForNativeIdle({realm}, {wait_for_referenced_resources}); return outcome; }})
   .then(
     outcome => window.__ass.send({{ kind: "result", id: {id}, success: outcome.success, display: outcome.display }}),
     error => window.__ass.send({{ kind: "result", id: {id}, success: false, display: window.__ass.inspect(error) }})
@@ -428,12 +661,22 @@ fn evaluation_script(
     } else {
         format!(
             r#"Promise.resolve()
-  .then(() => {evaluation})
+  .then(() => import({encoded_buffer_module_url}))
+  .then(module => {{ globalThis.Buffer ??= module.Buffer; return {evaluation}; }})
+  .then(async value => {{ await window.__ass.waitForNativeIdle({realm}, {wait_for_referenced_resources}); return value; }})
   .then(
     value => window.__ass.send({{ kind: "result", id: {id}, success: true, display: window.__ass.inspect(value) }}),
     error => window.__ass.send({{ kind: "result", id: {id}, success: false, display: window.__ass.inspect(error) }})
   );"#
         )
+    }
+}
+
+const fn native_realm_id(evaluation_id: u64, isolated: bool) -> u64 {
+    if isolated {
+        evaluation_id
+    } else {
+        MAIN_REALM_ID
     }
 }
 

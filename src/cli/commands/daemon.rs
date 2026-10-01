@@ -207,6 +207,7 @@ mod unix {
                         module_path,
                         module_root,
                         isolated: true,
+                        wait_for_referenced_resources: true,
                         response,
                     }))
                     .is_err()
@@ -236,6 +237,10 @@ mod unix {
                             if write_response(&mut stream, &output).is_err() {
                                 break;
                             }
+                        }
+                        EvaluationEvent::Exit(code) => {
+                            let _ = write_response(&mut stream, &DaemonResponse::Exit { code });
+                            break;
                         }
                         EvaluationEvent::Result(result) => {
                             if result.success {

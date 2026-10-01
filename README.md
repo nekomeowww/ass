@@ -74,10 +74,13 @@ xvfb-run -a ass -p '21 * 2'
 - Supports TypeScript, powered by [Oxc](https://oxc.rs/).
 - Supports module resolution, including relative static and dynamic imports.
 - Supports HTTP imports through the system WebView.
+- Supports a growing set of `node:` built-in ESM modules. Pure modules run in the WebView; asynchronous filesystem and subprocess operations are proxied through Rust.
 - Supports [`Promise`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise) results.
 - Supports an interactive [REPL](https://nodejs.org/api/repl.html).
 - Supports a cached daemon for faster startup: `24.40x` faster than a cold WebView, reducing latency by `95.90%`.
-- Does not support [Node.js built-in modules](https://nodejs.org/api/modules.html#built-in-modules), CommonJS, or bare package resolution directly.
+- Does not support CommonJS or bare package resolution directly, except for Node.js built-ins such as `fs` and `node:fs`. Native synchronous Node APIs such as `readFileSync` cannot be implemented faithfully across the asynchronous system-WebView bridge and fail explicitly.
+
+See the [Node built-in compatibility matrix](./docs/node-builtins-compatibility.md) for the supported surface and known differences.
 
 ## Usage
 

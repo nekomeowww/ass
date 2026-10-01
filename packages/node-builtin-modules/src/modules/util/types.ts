@@ -1,0 +1,48 @@
+const tag = (value: unknown) => Object.prototype.toString.call(value)
+const hasTag = (name: string) => (value: unknown) => tag(value) === `[object ${name}]`
+
+export const isAnyArrayBuffer = value => isArrayBuffer(value) || isSharedArrayBuffer(value)
+export const isArgumentsObject = hasTag('Arguments')
+export const isArrayBuffer = hasTag('ArrayBuffer')
+export const isArrayBufferView = ArrayBuffer.isView
+export const isAsyncFunction = hasTag('AsyncFunction')
+export const isBigInt64Array = hasTag('BigInt64Array')
+export const isBigIntObject = hasTag('BigInt')
+export const isBigUint64Array = hasTag('BigUint64Array')
+export const isBooleanObject = hasTag('Boolean')
+export const isBoxedPrimitive = value => isBigIntObject(value) || isBooleanObject(value) || isNumberObject(value) || isStringObject(value) || isSymbolObject(value)
+export const isCryptoKey = hasTag('CryptoKey')
+export const isDataView = hasTag('DataView')
+export const isDate = hasTag('Date')
+export const isExternal = () => false
+export const isFloat16Array = hasTag('Float16Array')
+export const isFloat32Array = hasTag('Float32Array')
+export const isFloat64Array = hasTag('Float64Array')
+export const isGeneratorFunction = hasTag('GeneratorFunction')
+export const isGeneratorObject = hasTag('Generator')
+export const isInt16Array = hasTag('Int16Array')
+export const isInt32Array = hasTag('Int32Array')
+export const isInt8Array = hasTag('Int8Array')
+export const isKeyObject = () => false
+export const isMap = hasTag('Map')
+export const isMapIterator = hasTag('Map Iterator')
+export const isModuleNamespaceObject = hasTag('Module')
+export const isNativeError = value => value instanceof Error || tag(value).endsWith('Error]')
+export const isNumberObject = hasTag('Number')
+export const isPromise = hasTag('Promise')
+export const isProxy = () => false
+export const isRegExp = hasTag('RegExp')
+export const isSet = hasTag('Set')
+export const isSetIterator = hasTag('Set Iterator')
+export const isSharedArrayBuffer = hasTag('SharedArrayBuffer')
+export const isStringObject = hasTag('String')
+export const isSymbolObject = hasTag('Symbol')
+export const isTypedArray = value => ArrayBuffer.isView(value) && !isDataView(value)
+export const isUint16Array = hasTag('Uint16Array')
+export const isUint32Array = hasTag('Uint32Array')
+export const isUint8Array = hasTag('Uint8Array')
+export const isUint8ClampedArray = hasTag('Uint8ClampedArray')
+export const isWeakMap = hasTag('WeakMap')
+export const isWeakSet = hasTag('WeakSet')
+
+export default { isAnyArrayBuffer, isArgumentsObject, isArrayBuffer, isArrayBufferView, isAsyncFunction, isBigInt64Array, isBigIntObject, isBigUint64Array, isBooleanObject, isBoxedPrimitive, isCryptoKey, isDataView, isDate, isExternal, isFloat16Array, isFloat32Array, isFloat64Array, isGeneratorFunction, isGeneratorObject, isInt8Array, isInt16Array, isInt32Array, isKeyObject, isMap, isMapIterator, isModuleNamespaceObject, isNativeError, isNumberObject, isPromise, isProxy, isRegExp, isSet, isSetIterator, isSharedArrayBuffer, isStringObject, isSymbolObject, isTypedArray, isUint8Array, isUint8ClampedArray, isUint16Array, isUint32Array, isWeakMap, isWeakSet }

@@ -16,5 +16,3 @@ pnpm-debug.log*
 # Build output
 target/
 **/dist/
-!packages/bridge/dist/
-!packages/bridge/dist/**/*.js

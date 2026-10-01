@@ -1,0 +1,11 @@
+{
+  "name": "@ass/node-builtin-modules",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsdown",
+    "test": "pnpm run typecheck && pnpm run build && pnpm run test:runtime",
+    "test:runtime": "node tests/buffer.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict'
+import os, { EOL, arch, availableParallelism, cpus, devNull, endianness, homedir, hostname, loadavg, machine, platform, release, tmpdir, totalmem, type, uptime, userInfo, version } from 'node:os'
+
+assert.equal(os.arch, arch)
+assert.equal(typeof arch(), 'string')
+assert.equal(typeof platform(), 'string')
+assert.equal(typeof type(), 'string')
+assert.equal(typeof release(), 'string')
+assert.equal(typeof version(), 'string')
+assert.equal(typeof machine(), 'string')
+assert.equal(typeof hostname(), 'string')
+assert.equal(typeof homedir(), 'string')
+assert.equal(typeof tmpdir(), 'string')
+assert.equal(typeof devNull, 'string')
+assert.equal(typeof EOL, 'string')
+assert.equal(['BE', 'LE'].includes(endianness()), true)
+assert.equal(availableParallelism() > 0, true)
+assert.equal(cpus().length > 0, true)
+assert.equal(cpus().every(cpu => typeof cpu.model === 'string' && typeof cpu.times.user === 'number'), true)
+assert.equal(loadavg().length, 3)
+assert.equal(totalmem() >= 0, true)
+assert.equal(uptime() >= 0, true)
+assert.equal(typeof userInfo().username, 'string')
+
+console.log('os snapshot ok')

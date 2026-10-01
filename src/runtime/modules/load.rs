@@ -97,6 +97,18 @@ impl ModuleHost {
 
     fn load(&self, request_path: &str) -> Result<LoadedModule, LoadError> {
         let (id, encoded_path) = parse_request_path(request_path)?;
+        let relative = percent_decode_str(encoded_path)
+            .decode_utf8()
+            .map_err(|_| LoadError::bad_request("module path is not valid UTF-8"))?;
+        if let Some(name) = relative.strip_prefix("__ass_builtin__/") {
+            let source = builtin_source(name).ok_or_else(|| {
+                LoadError::not_found(format!("unsupported Node.js built-in module node:{name}"))
+            })?;
+            return Ok(LoadedModule {
+                bytes: rewrite_node_specifiers(source, id).into_bytes().into(),
+                content_type: "text/javascript; charset=utf-8",
+            });
+        }
         let mount = self
             .mounts
             .read()
@@ -104,9 +116,6 @@ impl ModuleHost {
             .get(&id)
             .cloned()
             .ok_or_else(|| LoadError::not_found(format!("unknown module mount {id}")))?;
-        let relative = percent_decode_str(encoded_path)
-            .decode_utf8()
-            .map_err(|_| LoadError::bad_request("module path is not valid UTF-8"))?;
         let candidate = mount.root.join(relative.as_ref());
         let canonical = fs::canonicalize(&candidate).map_err(|error| {
             LoadError::not_found(format!(
@@ -127,17 +136,167 @@ impl ModuleHost {
             let output = transpile::transpile_typescript(&source, Some(&canonical))
                 .map_err(LoadError::unprocessable)?;
             return Ok(LoadedModule {
-                bytes: output.into_bytes().into(),
+                bytes: rewrite_node_specifiers(&output, id).into_bytes().into(),
                 content_type: "text/javascript; charset=utf-8",
             });
         }
 
+        let bytes = if matches!(
+            canonical
+                .extension()
+                .and_then(|extension| extension.to_str()),
+            Some("js" | "mjs" | "cjs" | "jsx")
+        ) {
+            let source = String::from_utf8(bytes)
+                .map_err(|_| LoadError::bad_request("JavaScript source is not valid UTF-8"))?;
+            rewrite_node_specifiers(&source, id).into_bytes()
+        } else {
+            bytes
+        };
         Ok(LoadedModule {
             content_type: content_type(&canonical),
             bytes: bytes.into(),
         })
     }
 }
+
+pub(crate) fn rewrite_node_specifiers(source: &str, id: u64) -> String {
+    let prefix = format!("{MODULE_SCHEME}://{MODULE_HOST}/{id}/__ass_builtin__/");
+    let tokens = module_tokens(source);
+    let mut replacements = Vec::new();
+
+    for (index, token) in tokens.iter().enumerate() {
+        let ModuleToken::String {
+            content_end,
+            content_start,
+            template,
+        } = token
+        else {
+            continue;
+        };
+        if !is_module_specifier_token(&tokens, index, *template) {
+            continue;
+        }
+        let specifier = &source[*content_start..*content_end];
+        let builtin = specifier.strip_prefix("node:").unwrap_or(specifier);
+        if builtin_source(builtin).is_some() {
+            replacements.push((*content_start, *content_end, format!("{prefix}{builtin}")));
+        }
+    }
+
+    let mut output = source.to_owned();
+    for (start, end, replacement) in replacements.into_iter().rev() {
+        output.replace_range(start..end, &replacement);
+    }
+    output
+}
+
+#[derive(Clone, Copy)]
+enum ModuleToken<'a> {
+    Identifier(&'a str),
+    Punct(u8),
+    String {
+        content_start: usize,
+        content_end: usize,
+        template: bool,
+    },
+}
+
+fn module_tokens(source: &str) -> Vec<ModuleToken<'_>> {
+    let bytes = source.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            byte if byte.is_ascii_whitespace() => index += 1,
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && !matches!(bytes[index], b'\n' | b'\r') {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() && &bytes[index..index + 2] != b"*/" {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+            }
+            quote @ (b'\'' | b'"' | b'`') => {
+                let content_start = index + 1;
+                let mut template_has_substitution = false;
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == b'\\' {
+                        index = (index + 2).min(bytes.len());
+                    } else if quote == b'`' && &bytes[index..bytes.len().min(index + 2)] == b"${" {
+                        template_has_substitution = true;
+                        index += 2;
+                    } else if bytes[index] == quote {
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+                let content_end = index.min(bytes.len());
+                index = (index + 1).min(bytes.len());
+                if !template_has_substitution {
+                    tokens.push(ModuleToken::String {
+                        content_start,
+                        content_end,
+                        template: quote == b'`',
+                    });
+                }
+            }
+            byte if byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$') => {
+                let start = index;
+                index += 1;
+                while bytes
+                    .get(index)
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
+                {
+                    index += 1;
+                }
+                tokens.push(ModuleToken::Identifier(&source[start..index]));
+            }
+            punct => {
+                tokens.push(ModuleToken::Punct(punct));
+                index += 1;
+            }
+        }
+    }
+    tokens
+}
+
+fn is_module_specifier_token(tokens: &[ModuleToken<'_>], index: usize, template: bool) -> bool {
+    let previous = index.checked_sub(1).and_then(|index| tokens.get(index));
+    let before_previous = index.checked_sub(2).and_then(|index| tokens.get(index));
+    let import_call = matches!(previous, Some(ModuleToken::Punct(b'(')))
+        && matches!(before_previous, Some(ModuleToken::Identifier("import")))
+        && !matches!(
+            index.checked_sub(3).and_then(|index| tokens.get(index)),
+            Some(ModuleToken::Punct(b'.'))
+        );
+    if import_call {
+        return true;
+    }
+    if template {
+        return false;
+    }
+    if matches!(previous, Some(ModuleToken::Identifier("import"))) {
+        return true;
+    }
+    if !matches!(previous, Some(ModuleToken::Identifier("from"))) {
+        return false;
+    }
+    tokens[..index.saturating_sub(1)]
+        .iter()
+        .rev()
+        .take_while(|token| !matches!(token, ModuleToken::Punct(b';')))
+        .any(|token| matches!(token, ModuleToken::Identifier("import" | "export")))
+}
+
+include!(concat!(env!("OUT_DIR"), "/node_builtins.rs"));
 
 struct LoadedModule {
     bytes: Cow<'static, [u8]>,
@@ -227,4 +386,43 @@ fn response(
         .header("Cross-Origin-Resource-Policy", "cross-origin")
         .body(body)
         .expect("static module response headers are valid")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rewrite_node_specifiers;
+
+    #[test]
+    fn rewrites_static_and_dynamic_node_imports_only() {
+        let source = r#"
+import fs from 'node:fs'
+export { Buffer } from "node:buffer"
+const crypto = import('node:crypto')
+const label = 'node:path'
+"#;
+        let rewritten = rewrite_node_specifiers(source, 7);
+        assert!(rewritten.contains("ass://module/7/__ass_builtin__/fs"));
+        assert!(rewritten.contains("ass://module/7/__ass_builtin__/buffer"));
+        assert!(rewritten.contains("ass://module/7/__ass_builtin__/crypto"));
+        assert!(rewritten.contains("const label = 'node:path'"));
+    }
+
+    #[test]
+    fn rewrites_comments_templates_and_bare_builtins_safely() {
+        let source = r#"
+const label = "from 'node:path'"
+// import 'node:fs'
+import /* bundler hint */ 'node:fs'
+const crypto = import(`node:crypto`)
+const path = import('path')
+"#;
+        let rewritten = rewrite_node_specifiers(source, 9);
+        assert!(rewritten.contains("const label = \"from 'node:path'\""));
+        assert!(rewritten.contains("// import 'node:fs'"));
+        assert!(
+            rewritten.contains("import /* bundler hint */ 'ass://module/9/__ass_builtin__/fs'")
+        );
+        assert!(rewritten.contains("import(`ass://module/9/__ass_builtin__/crypto`)"));
+        assert!(rewritten.contains("import('ass://module/9/__ass_builtin__/path')"));
+    }
 }

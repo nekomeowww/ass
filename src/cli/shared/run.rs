@@ -10,7 +10,10 @@ use std::{
 use crate::{
     cli::{Cli, Command as CliCommand, DaemonCommand, commands::daemon},
     processors::transpile,
-    runtime::{Evaluation, EvaluationEvent, EvaluationMode, EvaluationResult, Runtime, UserEvent},
+    runtime::{
+        Evaluation, EvaluationEvent, EvaluationMode, EvaluationResult, Runtime, UncaughtPolicy,
+        UserEvent,
+    },
 };
 use clap::Parser;
 use winit::event_loop::{EventLoop, EventLoopProxy};
@@ -28,6 +31,11 @@ enum InputMode {
         typescript: bool,
         module: bool,
     },
+}
+
+enum EvaluationCompletion {
+    Exit(i32),
+    Result(EvaluationResult),
 }
 
 pub(crate) fn run() -> ExitCode {
@@ -62,7 +70,7 @@ pub(crate) fn run() -> ExitCode {
         }
     };
     let proxy = event_loop.create_proxy();
-    let (initial_evaluation, controller) = match mode {
+    let (initial_evaluation, controller, uncaught_policy) = match mode {
         InputMode::Once {
             source,
             path,
@@ -85,23 +93,28 @@ pub(crate) fn run() -> ExitCode {
                 module_path: if module { path } else { None },
                 module_root: if module { root } else { None },
                 isolated: false,
+                wait_for_referenced_resources: true,
                 response,
             };
             let controller = thread::spawn(move || {
                 let code = finish_once(receiver, print_result);
                 let _ = proxy.send_event(UserEvent::Exit(code));
             });
-            (Some(evaluation), controller)
+            (Some(evaluation), controller, UncaughtPolicy::ExitRuntime)
         }
         InputMode::Repl { typescript, module } => {
             let controller = thread::spawn(move || {
                 let code = run_repl(&proxy, typescript, module);
                 let _ = proxy.send_event(UserEvent::Exit(code));
             });
-            (None, controller)
+            (None, controller, UncaughtPolicy::ReportAndContinue)
         }
     };
-    let mut runtime = Runtime::new(event_loop.create_proxy(), initial_evaluation);
+    let mut runtime = Runtime::new(
+        event_loop.create_proxy(),
+        initial_evaluation,
+        uncaught_policy,
+    );
 
     if let Err(error) = event_loop.run_app(&mut runtime) {
         eprintln!("ass: event loop failed: {error}");
@@ -171,7 +184,11 @@ fn run_daemon_server() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut runtime = Runtime::new(event_loop.create_proxy(), None);
+    let mut runtime = Runtime::new(
+        event_loop.create_proxy(),
+        None,
+        UncaughtPolicy::ReportAndContinue,
+    );
     let result = event_loop.run_app(&mut runtime);
     let exit_code = runtime.exit_code();
     drop(runtime);
@@ -293,6 +310,7 @@ fn finish_once(receiver: mpsc::Receiver<EvaluationEvent>, print_result: bool) ->
     loop {
         match receiver.recv() {
             Ok(EvaluationEvent::Console { level, text }) => print_console(&level, &text),
+            Ok(EvaluationEvent::Exit(code)) => return code,
             Ok(EvaluationEvent::Result(result)) if result.success => {
                 if print_result {
                     println!("{}", result.display);
@@ -358,8 +376,11 @@ fn run_repl(proxy: &EventLoopProxy<UserEvent>, typescript: bool, module: bool) -
             }
         };
         match evaluate(proxy, source, evaluation_mode(line_is_module)) {
-            Ok(result) if result.success => println!("{}", result.display),
-            Ok(result) => eprintln!("{}", result.display),
+            Ok(EvaluationCompletion::Result(result)) if result.success => {
+                println!("{}", result.display);
+            }
+            Ok(EvaluationCompletion::Result(result)) => eprintln!("{}", result.display),
+            Ok(EvaluationCompletion::Exit(code)) => return code,
             Err(error) => {
                 eprintln!("ass: {error}");
                 return 1;
@@ -401,7 +422,7 @@ fn evaluate(
     proxy: &EventLoopProxy<UserEvent>,
     source: String,
     mode: EvaluationMode,
-) -> Result<EvaluationResult, String> {
+) -> Result<EvaluationCompletion, String> {
     let (response, receiver) = mpsc::channel();
     proxy
         .send_event(UserEvent::Evaluate(Evaluation {
@@ -410,13 +431,17 @@ fn evaluate(
             module_path: None,
             module_root: None,
             isolated: false,
+            wait_for_referenced_resources: false,
             response,
         }))
         .map_err(|_| "runtime stopped before evaluation was submitted".to_owned())?;
     loop {
         match receiver.recv() {
             Ok(EvaluationEvent::Console { level, text }) => print_console(&level, &text),
-            Ok(EvaluationEvent::Result(result)) => return Ok(result),
+            Ok(EvaluationEvent::Exit(code)) => return Ok(EvaluationCompletion::Exit(code)),
+            Ok(EvaluationEvent::Result(result)) => {
+                return Ok(EvaluationCompletion::Result(result));
+            }
             Err(_) => return Err("runtime stopped before evaluation completed".to_owned()),
         }
     }
