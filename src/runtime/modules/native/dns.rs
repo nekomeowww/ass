@@ -77,8 +77,8 @@ fn lookup_service(args: LookupServiceArgs) -> NativeResult {
             syscall: Some("getnameinfo".to_owned()),
         })?;
     let socket = SocketAddr::new(ip, args.port);
-    let mut host = [0_i8; 1025];
-    let mut service = [0_i8; 32];
+    let mut host: [libc::c_char; 1025] = [0; 1025];
+    let mut service: [libc::c_char; 32] = [0; 32];
     let result = match socket {
         SocketAddr::V4(address) => {
             // SAFETY: zero is a valid baseline for sockaddr_in before assigning required fields.

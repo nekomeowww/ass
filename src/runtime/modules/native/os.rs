@@ -118,7 +118,7 @@ fn home_dir() -> String {
 
 #[cfg(unix)]
 fn hostname() -> String {
-    let mut buffer = [0_i8; 256];
+    let mut buffer: [libc::c_char; 256] = [0; 256];
     // SAFETY: buffer is writable for its full length and gethostname writes at most that length.
     if unsafe { libc::gethostname(buffer.as_mut_ptr(), buffer.len()) } == 0 {
         // Ensure a terminator even when the platform truncates the hostname.
