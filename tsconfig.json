@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
@@ -14,7 +15,9 @@
     "skipLibCheck": true,
     "strict": true,
     "target": "ESNext",
+    "types": ["node"],
     "verbatimModuleSyntax": true
   },
+  "include": ["tests/node-builtins/run.ts", "tests/node-builtins/regressions.ts"],
   "exclude": ["node_modules", "**/dist/**", "target"]
 }

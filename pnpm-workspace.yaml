@@ -12,6 +12,7 @@ packages:
 catalog:
   '@antfu/eslint-config': ^8.2.0
   '@moeru/eslint-config': ^0.1.0-beta.18
+  '@types/node': ^26.6.3
   cspell: ^10.0.1
   eslint: ^10.5.0
   eslint-plugin-oxlint: ^1.73.0

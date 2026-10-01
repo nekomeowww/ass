@@ -12,6 +12,9 @@ catalogs:
     '@moeru/eslint-config':
       specifier: ^0.1.0-beta.18
       version: 0.1.0-beta.20
+    '@types/node':
+      specifier: ^26.6.3
+      version: 26.6.3
     cspell:
       specifier: ^10.0.1
       version: 10.0.1
@@ -50,6 +53,9 @@ importers:
       '@moeru/eslint-config':
         specifier: 'catalog:'
         version: 0.1.0-beta.20(@antfu/eslint-config@8.3.0(@typescript-eslint/typescript-estree@8.65.0(typescript@5.9.3))(@typescript-eslint/utils@8.65.0(eslint@10.8.0(jiti@2.7.0))(typescript@5.9.3))(@vue/compiler-sfc@3.5.40)(eslint@10.8.0(jiti@2.7.0))(oxlint@1.76.0)(typescript@5.9.3))(eslint-plugin-oxlint@1.76.0(oxlint@1.76.0))(eslint@10.8.0(jiti@2.7.0))(typescript@5.9.3)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.3
       cspell:
         specifier: 'catalog:'
         version: 10.0.1
@@ -88,6 +94,8 @@ importers:
         version: 4.17.21
 
   packages/bridge: {}
+
+  packages/node-builtin-modules: {}
 
 packages:
 
@@ -1074,6 +1082,9 @@ packages:
 
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
+
+  '@types/node@26.6.3':
+    resolution: {integrity: sha512-dsqMQQoeTLqu9wynDD00q573mNzso3IdQOAfHRJqLCcmCFPoGo9A1bDpUcv/9tnKpErQWv9uKeGfl37EIS02Yg==}
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
@@ -2498,6 +2509,9 @@ packages:
   unconfig@7.5.0:
     resolution: {integrity: sha512-oi8Qy2JV4D3UQ0PsopR28CzdQ3S/5A1zwsUwp/rosSbfhJ5z7b90bIyTwi/F7hCLD4SGcZVjDzd4XoUQcEanvA==}
 
+  undici-types@8.9.0:
+    resolution: {integrity: sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg==}
+
   unist-util-is@6.0.1:
     resolution: {integrity: sha512-LsiILbtBETkDz8I9p1dQ0uyRUWuaQzd/cuEeS1hoRSyW5E5XGmTzlwY1OrNzzakGowI9Dr/I8HVaw4hTtnxy8g==}
 
@@ -3374,6 +3388,10 @@ snapshots:
       '@types/unist': 3.0.3
 
   '@types/ms@2.1.0': {}
+
+  '@types/node@26.6.3':
+    dependencies:
+      undici-types: 8.9.0
 
   '@types/unist@3.0.3': {}
 
@@ -5036,6 +5054,8 @@ snapshots:
       jiti: 2.7.0
       quansync: 1.0.0
       unconfig-core: 7.5.0
+
+  undici-types@8.9.0: {}
 
   unist-util-is@6.0.1:
     dependencies:

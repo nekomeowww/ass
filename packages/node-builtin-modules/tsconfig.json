@@ -1,0 +1,27 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "baseUrl": ".",
+    "paths": {
+      "@ass/node-builtin-modules/dns/promises": ["./src/modules/dns/promises.ts"],
+      "@ass/node-builtin-modules/fs/promises": ["./src/modules/fs/promises.ts"],
+      "@ass/node-builtin-modules/internal/*": ["./src/internal/*.ts"],
+      "@ass/node-builtin-modules/path/posix": ["./src/modules/path/posix.ts"],
+      "@ass/node-builtin-modules/path/win32": ["./src/modules/path/win32.ts"],
+      "@ass/node-builtin-modules/readline/promises": ["./src/modules/readline/promises.ts"],
+      "@ass/node-builtin-modules/stream/consumers": ["./src/modules/stream/consumers.ts"],
+      "@ass/node-builtin-modules/stream/promises": ["./src/modules/stream/promises.ts"],
+      "@ass/node-builtin-modules/stream/web": ["./src/modules/stream/web.ts"],
+      "@ass/node-builtin-modules/timers/promises": ["./src/modules/timers/promises.ts"],
+      "@ass/node-builtin-modules/util/types": ["./src/modules/util/types.ts"],
+      "@ass/node-builtin-modules/*": ["./src/modules/*/index.ts"]
+    },
+    "types": [],
+    "allowImportingTsExtensions": true,
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false
+  },
+  "include": ["src", "scripts", "tsdown.config.ts"]
+}

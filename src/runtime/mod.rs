@@ -3,5 +3,6 @@ mod implementation;
 mod modules;
 
 pub(crate) use implementation::{
-    Evaluation, EvaluationEvent, EvaluationMode, EvaluationResult, Runtime, UserEvent,
+    Evaluation, EvaluationEvent, EvaluationMode, EvaluationResult, Runtime, UncaughtPolicy,
+    UserEvent,
 };
