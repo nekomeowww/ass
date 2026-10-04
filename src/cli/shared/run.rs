@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, BufRead, IsTerminal, Read, Write},
+    io::{self, IsTerminal, Read},
     path::{Path, PathBuf},
     process::ExitCode,
     sync::mpsc,
@@ -16,6 +16,7 @@ use crate::{
     },
 };
 use clap::Parser;
+use rustyline::{DefaultEditor, error::ReadlineError};
 use winit::event_loop::{EventLoop, EventLoopProxy};
 
 enum InputMode {
@@ -345,17 +346,21 @@ fn run_repl(proxy: &EventLoopProxy<UserEvent>, typescript: bool, module: bool) -
     );
     println!("Type .exit or press Ctrl-D to leave.");
 
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines();
+    let mut editor = match DefaultEditor::new() {
+        Ok(editor) => editor,
+        Err(error) => {
+            eprintln!("ass: failed to initialize interactive input: {error}");
+            return 1;
+        }
+    };
     loop {
-        print!("> ");
-        let _ = io::stdout().flush();
-        let Some(line) = lines.next() else {
-            println!();
-            return 0;
-        };
-        let line = match line {
+        let line = match editor.readline("> ") {
             Ok(line) => line,
+            Err(ReadlineError::Interrupted) => continue,
+            Err(ReadlineError::Eof) => {
+                println!();
+                return 0;
+            }
             Err(error) => {
                 eprintln!("ass: failed to read input: {error}");
                 return 1;
@@ -366,6 +371,10 @@ fn run_repl(proxy: &EventLoopProxy<UserEvent>, typescript: bool, module: bool) -
         }
         if line.trim().is_empty() {
             continue;
+        }
+        if let Err(error) = editor.add_history_entry(line.as_str()) {
+            eprintln!("ass: failed to record input history: {error}");
+            return 1;
         }
         let line_is_module = module || transpile::is_module_source(&line, typescript);
         let source = match transpile::transpile_repl(&line, typescript) {

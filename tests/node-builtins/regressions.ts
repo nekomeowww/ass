@@ -167,6 +167,34 @@ if (globalThis.process.platform !== 'win32') {
       set timeout 10
       spawn -noecho ${ass}
       expect "> "
+      send "4+2\\033\\[D(\\033\\[C)\\r"
+      expect {
+        -re "\\r\\n6\\r\\n" {}
+        eof { exit 12 }
+        timeout { exit 13 }
+      }
+      expect "> "
+      send "40 + 2\\r"
+      expect {
+        -re "\\r\\n42\\r\\n" {}
+        eof { exit 14 }
+        timeout { exit 15 }
+      }
+      expect "> "
+      send "50 + 3\\r"
+      expect {
+        -re "\\r\\n53\\r\\n" {}
+        eof { exit 18 }
+        timeout { exit 19 }
+      }
+      expect "> "
+      send "\\033\\[A\\033\\[A\\033\\[A\\033\\[B\\r"
+      expect {
+        -re "\\r\\n42\\r\\n" {}
+        eof { exit 16 }
+        timeout { exit 17 }
+      }
+      expect "> "
       send {import('node:net').then(net => { globalThis.replServer = net.createServer().listen(0); return ['server', 'open'].join('-') })\r}
       expect {
         "server-open" {}
@@ -213,6 +241,7 @@ if (globalThis.process.platform !== 'win32') {
     repl.stderr.on('data', chunk => replOutput += chunk)
     const replExit = await new Promise(resolve => repl.once('exit', code => resolve(code)))
     assert.equal(replExit, 0, replOutput)
+    console.log('ok REPL direction-key editing and history')
     assert.match(replOutput, /ReferenceError: repl async exploded/)
     assert.match(replOutput, /42/)
   }
