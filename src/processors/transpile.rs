@@ -6,7 +6,10 @@ use std::path::PathBuf;
 #[cfg(feature = "typescript")]
 use oxc_allocator::Allocator;
 #[cfg(feature = "typescript")]
-use oxc_ast::ast::{Statement, VariableDeclarationKind};
+use oxc_ast::ast::{
+    BindingPattern, Declaration, ExportDefaultDeclarationKind, ImportDeclarationSpecifier,
+    ImportOrExportKind, Statement, VariableDeclarationKind,
+};
 #[cfg(feature = "typescript")]
 use oxc_codegen::Codegen;
 #[cfg(feature = "typescript")]
@@ -108,6 +111,7 @@ fn compile(
     }
 
     let mut program = parsed.program;
+    let repl_module = persistent_repl_bindings && program.source_type.is_module();
     let semantic = SemanticBuilder::new()
         .with_excess_capacity(2.0)
         .with_enum_eval(true)
@@ -135,7 +139,138 @@ fn compile(
         }
     }
 
-    Ok(Codegen::new().build(&program).code)
+    let mut output = Codegen::new().build(&program).code;
+    if repl_module {
+        let bindings = top_level_bindings(&program);
+        if !bindings.is_empty() {
+            output.push_str("\nObject.assign(globalThis, { ");
+            output.push_str(&bindings.join(", "));
+            output.push_str(" });\n");
+        }
+    }
+    Ok(output)
+}
+
+#[cfg(feature = "typescript")]
+fn top_level_bindings<'a>(program: &'a oxc_ast::ast::Program<'a>) -> Vec<&'a str> {
+    let mut bindings = Vec::new();
+    for statement in &program.body {
+        match statement {
+            Statement::ImportDeclaration(declaration) => {
+                if declaration.import_kind == ImportOrExportKind::Type {
+                    continue;
+                }
+                for specifier in declaration.specifiers.iter().flatten() {
+                    match specifier {
+                        ImportDeclarationSpecifier::ImportSpecifier(specifier)
+                            if specifier.import_kind == ImportOrExportKind::Value =>
+                        {
+                            push_unique(&mut bindings, specifier.local.name.as_str());
+                        }
+                        ImportDeclarationSpecifier::ImportDefaultSpecifier(specifier) => {
+                            push_unique(&mut bindings, specifier.local.name.as_str());
+                        }
+                        ImportDeclarationSpecifier::ImportNamespaceSpecifier(specifier) => {
+                            push_unique(&mut bindings, specifier.local.name.as_str());
+                        }
+                        ImportDeclarationSpecifier::ImportSpecifier(_) => {}
+                    }
+                }
+            }
+            Statement::VariableDeclaration(declaration) => {
+                for declarator in &declaration.declarations {
+                    collect_pattern_bindings(&declarator.id, &mut bindings);
+                }
+            }
+            Statement::FunctionDeclaration(function) => {
+                if let Some(identifier) = &function.id {
+                    push_unique(&mut bindings, identifier.name.as_str());
+                }
+            }
+            Statement::ClassDeclaration(class) => {
+                if let Some(identifier) = &class.id {
+                    push_unique(&mut bindings, identifier.name.as_str());
+                }
+            }
+            Statement::ExportNamedDeclaration(export) => {
+                if let Some(declaration) = &export.declaration {
+                    collect_declaration_bindings(declaration, &mut bindings);
+                }
+            }
+            Statement::ExportDefaultDeclaration(export) => match &export.declaration {
+                ExportDefaultDeclarationKind::FunctionDeclaration(function) => {
+                    if let Some(identifier) = &function.id {
+                        push_unique(&mut bindings, identifier.name.as_str());
+                    }
+                }
+                ExportDefaultDeclarationKind::ClassDeclaration(class) => {
+                    if let Some(identifier) = &class.id {
+                        push_unique(&mut bindings, identifier.name.as_str());
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    bindings
+}
+
+#[cfg(feature = "typescript")]
+fn collect_declaration_bindings<'a>(declaration: &'a Declaration<'a>, bindings: &mut Vec<&'a str>) {
+    match declaration {
+        Declaration::VariableDeclaration(declaration) => {
+            for declarator in &declaration.declarations {
+                collect_pattern_bindings(&declarator.id, bindings);
+            }
+        }
+        Declaration::FunctionDeclaration(function) => {
+            if let Some(identifier) = &function.id {
+                push_unique(bindings, identifier.name.as_str());
+            }
+        }
+        Declaration::ClassDeclaration(class) => {
+            if let Some(identifier) = &class.id {
+                push_unique(bindings, identifier.name.as_str());
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(feature = "typescript")]
+fn collect_pattern_bindings<'a>(pattern: &'a BindingPattern<'a>, bindings: &mut Vec<&'a str>) {
+    match pattern {
+        BindingPattern::BindingIdentifier(identifier) => {
+            push_unique(bindings, identifier.name.as_str());
+        }
+        BindingPattern::ObjectPattern(pattern) => {
+            for property in &pattern.properties {
+                collect_pattern_bindings(&property.value, bindings);
+            }
+            if let Some(rest) = &pattern.rest {
+                collect_pattern_bindings(&rest.argument, bindings);
+            }
+        }
+        BindingPattern::ArrayPattern(pattern) => {
+            for element in pattern.elements.iter().flatten() {
+                collect_pattern_bindings(element, bindings);
+            }
+            if let Some(rest) = &pattern.rest {
+                collect_pattern_bindings(&rest.argument, bindings);
+            }
+        }
+        BindingPattern::AssignmentPattern(pattern) => {
+            collect_pattern_bindings(&pattern.left, bindings);
+        }
+    }
+}
+
+#[cfg(feature = "typescript")]
+fn push_unique<'a>(bindings: &mut Vec<&'a str>, binding: &'a str) {
+    if !bindings.contains(&binding) {
+        bindings.push(binding);
+    }
 }
 
 #[cfg(feature = "typescript")]

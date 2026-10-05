@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    cli::{Cli, Command as CliCommand, DaemonCommand, commands::daemon},
+    cli::{Cli, Command as CliCommand, DaemonCommand, commands::daemon, shared::repl::ReplHelper},
     processors::transpile,
     runtime::{
         Evaluation, EvaluationEvent, EvaluationMode, EvaluationResult, Runtime, UncaughtPolicy,
@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use clap::Parser;
-use rustyline::{DefaultEditor, error::ReadlineError};
+use rustyline::{Editor, error::ReadlineError, history::DefaultHistory};
 use winit::event_loop::{EventLoop, EventLoopProxy};
 
 enum InputMode {
@@ -346,13 +346,14 @@ fn run_repl(proxy: &EventLoopProxy<UserEvent>, typescript: bool, module: bool) -
     );
     println!("Type .exit or press Ctrl-D to leave.");
 
-    let mut editor = match DefaultEditor::new() {
+    let mut editor = match Editor::<ReplHelper, DefaultHistory>::new() {
         Ok(editor) => editor,
         Err(error) => {
             eprintln!("ass: failed to initialize interactive input: {error}");
             return 1;
         }
     };
+    editor.set_helper(Some(ReplHelper));
     loop {
         let line = match editor.readline("> ") {
             Ok(line) => line,
