@@ -47,6 +47,24 @@ fn makes_top_level_repl_bindings_persistent() {
 }
 
 #[test]
+#[cfg(feature = "typescript")]
+fn persists_static_import_bindings_from_repl_modules() {
+    let output = transpile_repl("import { env as processEnv } from 'node:process'", false)
+        .expect("REPL JavaScript should transpile");
+    assert!(output.contains("import { env as processEnv } from \"node:process\";"));
+    assert!(output.contains("Object.assign(globalThis, { processEnv });"));
+}
+
+#[test]
+#[cfg(feature = "typescript")]
+fn persists_top_level_await_bindings_from_repl_modules() {
+    let output = transpile_repl("const answer = await Promise.resolve(42); answer", false)
+        .expect("REPL JavaScript should transpile");
+    assert!(output.contains("var answer = await Promise.resolve(42)"));
+    assert!(output.contains("Object.assign(globalThis, { answer });"));
+}
+
+#[test]
 #[cfg(not(feature = "typescript"))]
 fn rejects_typescript_when_feature_is_disabled() {
     let error = transpile_typescript("const answer: number = 42", None)
