@@ -1,5 +1,5 @@
 import { Buffer } from '@ass/node-builtin-modules/buffer'
-import { base64ToBytes, bytesToBase64, op } from '@ass/node-builtin-modules/internal/ops'
+import { bytesToBase64, op } from '@ass/node-builtin-modules/internal/ops'
 
 const encodingOf = options => typeof options === 'string' ? options : options?.encoding
 const pathValue = path => path instanceof URL ? path.pathname : String(path)
@@ -37,8 +37,8 @@ export class Stats {
 const asStats = value => new Stats(value)
 
 export const readFile = async (path, options) => {
-  const result = await op('fs.readFile', { path: pathValue(path) })
-  const bytes = base64ToBytes(result.base64)
+  const result = await op<ArrayBuffer>('fs.readFileBytes', { path: pathValue(path) })
+  const bytes = Buffer.from(result)
   const encoding = encodingOf(options)
   return encoding ? bytes.toString(encoding) : bytes
 }

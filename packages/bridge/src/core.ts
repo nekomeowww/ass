@@ -9,9 +9,11 @@ const send = (message: NativeBridgeMessage): void => {
 }
 
 interface NativePending {
+  binary: boolean
   realm: number
   reject: (reason: Error) => void
   resolve: (value: unknown) => void
+  transfer?: AbortController
 }
 
 let nextNativeId = 1
@@ -26,7 +28,7 @@ const nativeCall = (method: string, args: unknown = null, realm = 0): Promise<un
       return
     }
     const call = nextNativeId++
-    nativePending.set(call, { realm, reject, resolve })
+    nativePending.set(call, { binary: method === 'fs.readFileBytes', realm, reject, resolve })
     send({ args, call, kind: 'native', op: method, realm, v: 1 })
   })
 
@@ -51,6 +53,7 @@ const closeNativeRealm = (realm: number): void => {
   for (const [call, pending] of nativePending) {
     if (pending.realm !== realm)
       continue
+    pending.transfer?.abort()
     nativePending.delete(call)
     pending.reject(Object.assign(new Error(`native realm ${realm} was closed`), { code: 'ERR_ASS_REALM_CLOSED' }))
   }
@@ -100,12 +103,38 @@ const waitForNativeIdle = async (realm = 0, waitForReferencedResources = true): 
  * - Rust native module host
  *
  * Downstream:
- * - {@link nativePending}
+ * - {@link nativePending}, or a one-use binary `fetch` followed by this handler
  */
 const resolveNative = (id: number, success: boolean, value: unknown): void => {
   const pending = nativePending.get(id)
   if (!pending)
     return
+  if (success && pending.binary) {
+    pending.binary = false
+    const url = typeof value === 'object' && value && '__assBinaryUrl' in value ? value.__assBinaryUrl : undefined
+    if (typeof url !== 'string') {
+      resolveNative(id, false, { code: 'ERR_ASS_PROTOCOL', message: 'missing binary read URL' })
+      return
+    }
+    const transfer = new AbortController()
+    pending.transfer = transfer
+    // Keep the native call pending through fetch and decoding, including when
+    // the caller does not await readFile. Realm teardown aborts the transfer.
+    void fetch(url, { cache: 'no-store', signal: transfer.signal })
+      .then(async (response) => {
+        if (!response.ok)
+          throw await response.json()
+        return response.arrayBuffer()
+      })
+      .then(bytes => resolveNative(id, true, bytes))
+      .catch(error => resolveNative(id, false, {
+        code: error?.code ?? 'EIO',
+        message: error?.message ?? 'binary read failed',
+        path: error?.path,
+        syscall: error?.syscall ?? 'read',
+      }))
+    return
+  }
   nativePending.delete(id)
   if (success) {
     pending.resolve(value)

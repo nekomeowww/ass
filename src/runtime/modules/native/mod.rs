@@ -1,3 +1,4 @@
+mod binary;
 mod child_process;
 mod codec;
 mod dgram;
@@ -21,6 +22,7 @@ pub(crate) use process::initialization_script as process_initialization_script;
 #[derive(Clone, Default)]
 pub(crate) struct NativeHost {
     resources: resources::ResourceTable,
+    binary_reads: binary::BinaryReads,
 }
 
 pub(crate) fn error(code: impl Into<String>, message: impl Into<String>) -> NativeError {
@@ -45,6 +47,7 @@ pub(crate) fn error(code: impl Into<String>, message: impl Into<String>) -> Nati
 impl NativeHost {
     pub(crate) fn execute(&self, realm: u64, op: &str, args: Value) -> NativeResult {
         match op.split_once('.') {
+            Some(("fs", "readFileBytes")) => self.binary_reads.prepare(realm, args),
             Some(("fs", operation)) => fs::execute(operation, args),
             Some(("child_process", operation)) => {
                 child_process::execute(&self.resources, realm, operation, args)
@@ -61,10 +64,34 @@ impl NativeHost {
     }
 
     pub(crate) fn close_realm(&self, realm: u64) {
+        self.binary_reads.close_realm(realm);
         self.resources.close_owner(realm);
     }
 
+    pub(crate) fn open_realm(&self, realm: u64) {
+        self.binary_reads.open_realm(realm);
+    }
+
+    pub(crate) fn is_binary_request(request: &wry::http::Request<Vec<u8>>) -> bool {
+        binary::BinaryReads::handles(request)
+    }
+
+    /// Routes `core.resolveNative`'s binary fetch through the native worker pool.
+    ///
+    /// Triggering workflow:
+    /// `WebViewBuilder::with_asynchronous_custom_protocol` -> [`Self::respond_binary`]
+    ///   -> `BinaryReads::respond` -> `RequestAsyncResponder::respond`.
+    pub(crate) fn respond_binary(
+        &self,
+        request: wry::http::Request<Vec<u8>>,
+        responder: wry::RequestAsyncResponder,
+        executor: &NativeExecutor,
+    ) {
+        self.binary_reads.respond(request, responder, executor);
+    }
+
     pub(crate) fn close_all(&self) {
+        self.binary_reads.close_all();
         self.resources.close_all();
     }
 }

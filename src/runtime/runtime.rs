@@ -177,6 +177,8 @@ impl Runtime {
             _ => None,
         };
         let protocol_host = self.module_host.clone();
+        let binary_host = self.native_host.clone();
+        let binary_executor = self.native_executor.clone();
         let mut builder = WebViewBuilder::new()
             .with_visible(false)
             .with_background_throttling(BackgroundThrottlingPolicy::Disabled)
@@ -186,9 +188,16 @@ impl Runtime {
             .with_initialization_script(include_str!(
                 "../../packages/bridge/dist/isolated-realm/isolated-realm.js"
             ))
-            .with_custom_protocol("ass".to_owned(), move |_webview_id, request| {
-                protocol_host.handle(request)
-            })
+            .with_asynchronous_custom_protocol(
+                "ass".to_owned(),
+                move |_webview_id, request, responder| {
+                    if NativeHost::is_binary_request(&request) {
+                        binary_host.respond_binary(request, responder, &binary_executor);
+                    } else {
+                        responder.respond(protocol_host.handle(request));
+                    }
+                },
+            )
             .with_ipc_handler(move |request| {
                 let _ = message_proxy.send_event(UserEvent::Message(request.body().clone()));
             })
@@ -280,6 +289,8 @@ impl Runtime {
             evaluation.wait_for_referenced_resources,
             module_url.as_deref(),
         );
+        self.native_host
+            .open_realm(native_realm_id(id, evaluation.isolated));
         self.pending = Some((
             id,
             native_realm_id(id, evaluation.isolated),
