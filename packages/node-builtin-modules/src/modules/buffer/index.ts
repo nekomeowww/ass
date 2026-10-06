@@ -1,6 +1,10 @@
 const encoder = new TextEncoder()
 const decoder = (encoding: string): TextDecoder => new TextDecoder(encoding === 'latin1' ? 'iso-8859-1' : encoding)
 
+// Older system WebViews do not have the typed-array Base64 methods yet.
+const base64Array = Uint8Array as typeof Uint8Array & { fromBase64?: (value: string) => Uint8Array }
+const encodeBase64 = (Uint8Array.prototype as Uint8Array & { toBase64?: () => string }).toBase64
+
 const decodeString = (value: string, encoding = 'utf8'): Uint8Array => {
   const normalized = String(encoding).toLowerCase().replace('-', '')
   if (normalized === 'hex') {
@@ -8,9 +12,31 @@ const decodeString = (value: string, encoding = 'utf8'): Uint8Array => {
     return Uint8Array.from(pairs, pair => Number.parseInt(pair, 16))
   }
   if (normalized === 'base64' || normalized === 'base64url') {
-    let input = value.replace(/-/g, '+').replace(/_/g, '/')
+    if (base64Array.fromBase64) {
+      try {
+        return base64Array.fromBase64(value)
+      }
+      catch {
+        // Retry Node's more permissive input forms below.
+      }
+    }
+    // Match Node's forgiving decoder: accept both alphabets, ignore non-alphabet
+    // characters, stop at padding, and discard an incomplete final sextet.
+    let input = value.replace(/[\u0100-\uFFFF]/g, character => String.fromCharCode(character.charCodeAt(0) & 0xFF))
+      .split('=', 1)[0]
+      .replace(/[^\w+/\-]/g, '')
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+    if (input.length % 4 === 1)
+      input = input.slice(0, -1)
+    if (base64Array.fromBase64)
+      return base64Array.fromBase64(input)
     input += '='.repeat((4 - input.length % 4) % 4)
-    return Uint8Array.from(atob(input), character => String(character).charCodeAt(0))
+    const text = atob(input)
+    const bytes = new Uint8Array(text.length)
+    for (let index = 0; index < text.length; index++)
+      bytes[index] = text.charCodeAt(index)
+    return bytes
   }
   if (normalized === 'ascii' || normalized === 'latin1' || normalized === 'binary')
     return Uint8Array.from(value, character => character.charCodeAt(0) & 0xFF)
@@ -60,8 +86,10 @@ export class Buffer extends Uint8ArrayBase {
   }
 
   static from(value: any, encodingOrOffset?: any, length?: number): Buffer {
-    if (typeof value === 'string')
-      return new Buffer(decodeString(value, encodingOrOffset))
+    if (typeof value === 'string') {
+      const bytes = decodeString(value, encodingOrOffset)
+      return new Buffer(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    }
     if (value instanceof ArrayBuffer) {
       const offset = encodingOrOffset || 0
       return new Buffer(value, offset, length ?? value.byteLength - offset)
@@ -97,7 +125,17 @@ export class Buffer extends Uint8ArrayBase {
     if (normalized === 'hex')
       return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
     if (normalized === 'base64' || normalized === 'base64url') {
-      const encoded = btoa(Array.from(bytes, byte => String.fromCharCode(byte)).join(''))
+      let encoded: string
+      if (encodeBase64) {
+        encoded = encodeBase64.call(bytes)
+      }
+      else {
+        // Bound argument count and temporary arrays on WebViews without toBase64.
+        const parts: string[] = []
+        for (let offset = 0; offset < bytes.length; offset += 0x8000)
+          parts.push(String.fromCharCode(...bytes.subarray(offset, offset + 0x8000)))
+        encoded = btoa(parts.join(''))
+      }
       return normalized === 'base64url' ? encoded.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '') : encoded
     }
     if (normalized === 'ascii' || normalized === 'latin1' || normalized === 'binary')
