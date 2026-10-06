@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { createConnection } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -156,6 +157,35 @@ if (globalThis.process.platform !== 'win32') {
     assert.equal(rebound.status, 0, rebound.stderr)
     assert.match(rebound.stdout, /daemon-rebound/)
     console.log('ok daemon releases an isolated realm after uncaught exception')
+
+    // New clients may send their first request after accept(), in multiple writes.
+    const socket = join(daemonDirectory, `ass-${globalThis.process.getuid!()}-${spawnSync(ass, ['--version'], { encoding: 'utf8' }).stdout.trim().split(' ').at(-1)}`, 'daemon.sock')
+    await new Promise<void>((resolve, reject) => {
+      const connection = createConnection(socket)
+      let received = ''
+      connection.setTimeout(3000, () => connection.destroy(new Error('delayed daemon request timed out')))
+      connection.on('error', reject)
+      connection.on('connect', () => {
+        setTimeout(() => {
+          connection.write('{"kind":')
+          setTimeout(() => connection.write('"ping"}\n'), 30)
+        }, 30)
+      })
+      connection.on('data', (data) => {
+        received += data
+        if (received.includes('\n')) {
+          try { assert.equal(JSON.parse(received).kind, 'pong') }
+          catch (error) { reject(error) }
+          connection.end()
+          resolve()
+        }
+      })
+      connection.on('end', () => {
+        if (!received.includes('\n'))
+          reject(new Error('daemon closed a partial request'))
+      })
+    })
+    console.log('ok daemon accepts delayed and fragmented requests')
   }
   finally {
     spawnSync(ass, ['daemon', 'stop'], { env: daemonEnvironment, timeout: 5_000 })
