@@ -338,7 +338,7 @@ window.__ass.evaluateIsolated = (source, module, moduleUrl = null, realm = 0) =>
             success: true,
             token,
             value,
-          }, '*'),
+          }, '*', value instanceof ArrayBuffer ? [value] : []),
           error => iframe.contentWindow?.postMessage({
             channel: 'ass-isolated-realm',
             id,

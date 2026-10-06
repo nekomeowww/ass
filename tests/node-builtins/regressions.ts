@@ -100,6 +100,11 @@ assert.equal(chunks.code, 0, chunks.stderr)
 assert.match(chunks.stdout, /bounded-native-write-chunks/)
 console.log('ok bounded native write chunks')
 
+const binaryLifecycle = await runCase('binary-lifecycle')
+assert.equal(binaryLifecycle.code, 0, binaryLifecycle.stderr)
+assert.match(binaryLifecycle.stdout, /one-use binary read token/)
+console.log('ok binary read tokens cannot be replayed')
+
 const uncaught = await runCase('uncaught-net-callback')
 assert.equal(uncaught.timeout, undefined, 'uncaught server callback left ass running')
 assert.equal(uncaught.code, 1)
@@ -186,6 +191,15 @@ if (globalThis.process.platform !== 'win32') {
       })
     })
     console.log('ok daemon accepts delayed and fragmented requests')
+
+    const binaryFixture = fileURLToPath(new URL('./fixtures/fs-binary.ts', import.meta.url))
+    const binary = spawnSync(ass, ['--reuse', binaryFixture], { env: daemonEnvironment, encoding: 'utf8', timeout: 15_000 })
+    assert.equal(binary.status, 0, binary.stderr)
+    assert.match(binary.stdout, /binary file reads ok/)
+    const detached = runReused(`import('node:fs/promises').then(fs => { fs.readFile('Cargo.toml', 'utf8').then(text => console.log(text.includes('name = "ass"'))) })`)
+    assert.equal(detached.status, 0, detached.stderr)
+    assert.equal(detached.stdout.trim(), 'true')
+    console.log('ok daemon binary reads and detached completion')
   }
   finally {
     spawnSync(ass, ['daemon', 'stop'], { env: daemonEnvironment, timeout: 5_000 })
