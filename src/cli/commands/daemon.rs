@@ -3,6 +3,7 @@ mod unix {
     use std::{
         fs::{self, DirBuilder},
         io::{BufRead, BufReader, Write},
+        os::fd::AsRawFd,
         os::unix::{
             fs::DirBuilderExt,
             net::{UnixListener, UnixStream},
@@ -96,6 +97,15 @@ mod unix {
             while !listener_stop.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        // Accepted sockets inherit nonblocking mode on macOS. A client
+                        // may connect before its first (or complete) request is written.
+                        if stream.set_nonblocking(false).is_err()
+                            || stream
+                                .set_read_timeout(Some(Duration::from_secs(5)))
+                                .is_err()
+                        {
+                            continue;
+                        }
                         last_activity = Instant::now();
                         let proxy = proxy.clone();
                         let stop = listener_stop.clone();
@@ -114,7 +124,14 @@ mod unix {
                             listener_stop.store(true, Ordering::Relaxed);
                             break;
                         }
-                        thread::sleep(Duration::from_millis(10));
+                        let mut descriptor = libc::pollfd {
+                            fd: listener.as_raw_fd(),
+                            events: libc::POLLIN,
+                            revents: 0,
+                        };
+                        // SAFETY: the listener remains live and descriptor points to one
+                        // initialized pollfd. The timeout also bounds shutdown latency.
+                        unsafe { libc::poll(&mut descriptor, 1, 100) };
                     }
                     Err(error) => {
                         eprintln!("ass: daemon listener failed: {error}");
@@ -283,9 +300,20 @@ mod unix {
         module_root: Option<PathBuf>,
         print_result: bool,
     ) -> Result<i32, String> {
-        ensure_started()?;
-        let mut stream = UnixStream::connect(socket_path())
-            .map_err(|error| format!("failed to connect to daemon: {error}"))?;
+        let mut stream = match UnixStream::connect(socket_path()) {
+            Ok(stream) => stream,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                ensure_started()?;
+                UnixStream::connect(socket_path())
+                    .map_err(|error| format!("failed to connect to daemon: {error}"))?
+            }
+            Err(error) => return Err(format!("failed to connect to daemon: {error}")),
+        };
         write_request(
             &mut stream,
             &DaemonRequest::Evaluate {
